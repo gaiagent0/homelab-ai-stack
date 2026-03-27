@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!-- Task Scheduler XML for AI stack autostart on Windows 11 Home ARM64.
+     Import with: schtasks /create /xml ai-stack-task.xml /tn "AI Stack Startup"
+     IMPORTANT: <UserId> must match your Windows username.
+     IMPORTANT: Delay (PT45S) inside <LogonTrigger> is the ONLY reliable way on Win11 Home.
+                schtasks /sc ONLOGON /delay silently ignores the parameter. -->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Start WSL2 AI Docker stack on user login</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>VIVO2\istva</UserId>
+      <Delay>PT45S</Delay>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>VIVO2\istva</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\AI\scripts\start-ai-stack.ps1</Arguments>
+    </Exec>
+  </Actions>
+</Task>

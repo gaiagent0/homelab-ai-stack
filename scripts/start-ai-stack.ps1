@@ -1,7 +1,7 @@
-# start-ai-stack.ps1
+﻿# start-ai-stack.ps1
 # Starts the WSL2-based AI stack on login.
 # Called by Task Scheduler ONLOGON task with 45s delay.
-# Source: https://github.com/YOUR_USER/homelab-ai-stack
+# Source: https://github.com/gaiagent0/homelab-ai-stack
 
 $LogFile = "C:\AI\logs\ai-stack-start.log"
 $ComposeFile = "C:\AI\wsl2\docker-compose.yml"

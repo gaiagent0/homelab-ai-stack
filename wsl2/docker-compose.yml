@@ -1,0 +1,116 @@
+# homelab-ai-stack — WSL2 Docker Compose
+# Copy this file to your WSL2 home: ~/ai-stack/docker-compose.yml
+# Then: cp .env.example .env && nano .env
+# Start: docker compose --env-file .env up -d
+#
+# Source: https://github.com/gaiagent0/homelab-ai-stack
+
+services:
+
+  # ----------------------------------------------------------------
+  # open-webui — Chat frontend (Ollama + GenieAPIService)
+  # ----------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://localhost:${OLLAMA_PORT:-11434}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-changeme}
+      - ENABLE_RAG_WEB_SEARCH=true
+      - RAG_WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://localhost:${SEARXNG_PORT:-8080}/search?q=<query>&format=json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ----------------------------------------------------------------
+  # searxng — Local meta-search (privacy-preserving web search)
+  # ----------------------------------------------------------------
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - searxng-data:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8080}
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-changeme}
+
+  # ----------------------------------------------------------------
+  # chromadb — Vector database for RAG
+  # ----------------------------------------------------------------
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - chromadb-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+
+  # ----------------------------------------------------------------
+  # n8n — Workflow automation
+  # ----------------------------------------------------------------
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - n8n-data:/home/node/.n8n
+    environment:
+      - N8N_PORT=${N8N_PORT:-5678}
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
+      - N8N_HOST=localhost
+      - WEBHOOK_URL=http://localhost:${N8N_PORT:-5678}
+      - TZ=${TZ:-Europe/Budapest}
+      - GENERIC_TIMEZONE=${TZ:-Europe/Budapest}
+
+  # ----------------------------------------------------------------
+  # immich-machine-learning — Remote ML for Immich (CLIP, face, OCR)
+  # Proxmox CT302 points MACHINE_LEARNING_URL to this host:3003
+  # CRITICAL: network_mode: host is required with mirrored WSL2 networking
+  # ----------------------------------------------------------------
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    container_name: immich-machine-learning
+    restart: unless-stopped
+    platform: linux/arm64
+    network_mode: host
+    # NOTE: Do NOT add a 'ports:' block when using network_mode: host
+    volumes:
+      - immich-ml-cache:/cache
+    environment:
+      - MACHINE_LEARNING_WORKERS=2
+      - MACHINE_LEARNING_WORKER_TIMEOUT=300
+      - MACHINE_LEARNING_CACHE_FOLDER=/cache
+      - MACHINE_LEARNING_PRELOAD__CLIP=ViT-B-16-SigLIP2__webli
+      - MACHINE_LEARNING_PRELOAD__FACIAL_RECOGNITION=buffalo_l
+      - OMP_NUM_THREADS=8
+      - OPENBLAS_NUM_THREADS=8
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; r=urllib.request.urlopen('http://localhost:3003/ping'); exit(0 if r.status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  open-webui-data:
+  searxng-data:
+  chromadb-data:
+  n8n-data:
+  immich-ml-cache:

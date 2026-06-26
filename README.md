@@ -1,66 +1,85 @@
 # homelab-ai-stack
 
-> **Local AI inference stack on Snapdragon X Elite (ARM64/NPU) + Immich ML offload.**  
-> WSL2-based Docker on Windows 11 Home ARM64, with autostart automation and remote ML serving for Immich running on Proxmox LXC.
+> **Local AI inference stack on Snapdragon X Elite (ARM64/NPU) + Proxmox AI Core.**  
+> Windows 11 ARM64 edge node (vivo2) + Proxmox CT305/CT306 backend — hybrid local-first AI platform.  
+> ⚠️ **Superseded by [ai-platform-os](https://github.com/gaiagent0/ai-platform-os)** — this repo documents the original WSL2-based stack; current canonical architecture is in ai-platform-os.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Snapdragon_X_Elite_ARM64-blue)](https://www.qualcomm.com/products/mobile/snapdragon/pcs-and-tablets/snapdragon-x-series)
 
 ---
 
-## Architecture
+## Current Architecture (2026)
 
 ```
-Proxmox (pve-03, CT302)              Windows 11 ARM64 (vivo2, 10.10.20.200)
-  Immich (photos/video)   ──ML──►   WSL2 Docker
-  open-webui              ──API──►    ├── ollama          (GGUF, CPU)
-  searxng                            ├── open-webui       (chat UI)
-  n8n                                ├── immich-machine-learning (CLIP/face/OCR)
-                                     ├── searxng          (meta-search)
-                                     ├── chromadb         (vector store)
-                                     └── n8n              (workflow automation)
+Proxmox pve-03
+  CT305 ai-infra (10.10.40.35)          CT306 observability (10.10.40.36)
+    ├── PostgreSQL 16                      ├── Langfuse v3 (LLM tracing)
+    ├── Qdrant (vector store, bge-m3)      ├── ClickHouse
+    ├── Mem0 (AI memory, :8888)            ├── MinIO
+    ├── n8n (workflow, :5678)              ├── Redis
+    ├── SearXNG (web search, :8080)        └── Prometheus exporters
+    ├── mem0-mcp (:8008, StreamableHTTP)
+    └── cAdvisor, postgres-exporter
 
-                                   NPU (Snapdragon X Elite):
-                                     GenieAPIService      (QNN GGUF, 40+ t/s)
-                                     Foundry Local        (ONNX/QNN)
+  CT208 grafana (10.10.40.208)
+    ├── Grafana (:3000)
+    └── Prometheus (:9090)
+
+Windows 11 ARM64 — vivo2 (10.10.20.200)
+  Native:
+    ├── Open WebUI       (:8091)  — primary chat UI
+    ├── Ollama           (:11434) — qwen3:8b, bge-m3, qwen2.5-coder:7b
+    ├── GenieAPIService  (:8912)  — QNN NPU, llama3.1-8b
+    ├── llama.cpp MTP    (:8081/:8083) — Qwen3-27B/8B
+    └── LiteLLM          (:4001)  — WSL2 Docker, model router
+
+  WSL2:
+    └── LiteLLM proxy (→ Ollama + OpenRouter + Groq)
 ```
 
-### Why WSL2 + Docker (not Proxmox VM)?
+### Key changes from original stack
 
-| Approach | Benefit | Drawback |
+| Component | Was | Now |
 |---|---|---|
-| WSL2 Docker (current) | Native ARM64, NPU accessible, zero virtualization overhead | Windows SYSTEM context cannot start WSL2 |
-| Proxmox VM (ARM64) | Full isolation, easier backup | No NPU passthrough support in PVE 8.x |
-| Native Linux bare metal | Best NPU driver support | No Windows coexistence |
-
-NPU passthrough into Proxmox VMs is not currently supported for Snapdragon X Elite — WSL2 is the only path to NPU acceleration from a Linux container on this hardware.
+| n8n | WSL2 Docker (vivo2) | CT305 (Proxmox LXC) |
+| SearXNG | WSL2 Docker (vivo2) | CT305 (Proxmox LXC) |
+| Vector store | ChromaDB (WSL2) | Qdrant v1.13.2 (CT305) |
+| Embeddings | nomic-embed-text | bge-m3 (1024 dim) |
+| Memory | — | Mem0 + PGVector (CT305) |
+| LLM tracing | — | Langfuse v3 (CT306) |
+| Open WebUI | WSL2 Docker | Windows-native (:8091) |
+| Bifrost/LiteLLM (WSL2) | removed | LiteLLM kept in WSL2 only |
 
 ---
 
-## Model Tiers
+## Model Tiers (current)
 
-### CPU/GGUF (Ollama) — always available
-| Model | Size | Use case |
+### Ollama (Windows-native, always available)
+| Model | Use case |
+|---|---|
+| `qwen3:8b` | General assistant, Mem0 LLM backend |
+| `bge-m3` | Embeddings (1024 dim, Qdrant) |
+| `qwen2.5-coder:7b` | Code |
+| `qwen2.5:14b` | High-quality general |
+| `deepseek-r1:8b` | Multi-step reasoning |
+| `llama3.1:8b` | General |
+
+### NPU (GenieAPIService, Windows-native)
+| Model | Format | Notes |
 |---|---|---|
-| `qwen2.5-coder:7b` | ~4.7 GB | Code, technical reasoning |
-| `llama3.1:8b` | ~4.9 GB | General assistant |
-| `deepseek-r1:8b` | ~5 GB | Multi-step reasoning |
-| `gpt-oss:20b` | ~13 GB | High-quality general (slower) |
+| `llama3.1-8b-qnn` | QNN/Genie | ~40-60 t/s |
+| `Qwen3-4B` | QNN/Genie (geniex) | via Nexa SDK |
 
-With 32 GB RAM, models up to ~20B run comfortably. Expected throughput: ~5–15 t/s for 8B, ~3–5 t/s for 20B.
-
-### NPU/QNN (GenieAPIService, Foundry Local) — fast, quantized
-| Model | Format | Throughput |
+### llama.cpp MTP (Windows-native)
+| Model | Port | Notes |
 |---|---|---|
-| `Llama3.2-3B (QNN)` | Genie | ~40–60 t/s |
-| `Phi-4-mini (ONNX)` | Foundry | ~30–50 t/s |
-| `Qwen2.5-7B (QNN)` | Genie | ~20–35 t/s |
-
-NPU models require Qualcomm QNN/ONNX format — not compatible with Ollama. Managed separately via GenieAPIService or `foundry run`.
+| Qwen3-27B MTP | :8081 | Multi-token prediction |
+| Qwen3-8B MTP | :8083 | Fast local inference |
 
 ---
 
-## Critical: WSL2 Autostart on Windows 11 Home
+## Critical: WSL2 Autostart on Windows 11
 
 **Problem:** Windows Task Scheduler tasks running as `SYSTEM` cannot start WSL2:
 ```
@@ -69,10 +88,7 @@ Error 0xc03a001c: WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED
 
 **Solution:** Task Scheduler `ONLOGON` trigger running as user context (`VIVO2\istva`).
 
-**Additional gotcha:** `schtasks /create /sc ONLOGON /delay` silently ignores the delay parameter. Use XML import with `<Delay>PT45S</Delay>` inside the `<LogonTrigger>` element.
-
 ```xml
-<!-- Critical: delay must be inside LogonTrigger, not as a standalone element -->
 <Triggers>
   <LogonTrigger>
     <Enabled>true</Enabled>
@@ -82,74 +98,42 @@ Error 0xc03a001c: WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED
 </Triggers>
 ```
 
-See [wsl2/task-scheduler-setup.md](wsl2/task-scheduler-setup.md) for full XML and debugging guide.
+WSL2 portproxy stability: `WSL2-PortProxy-NetworkChange` Scheduled Task via XML trigger (NetworkProfile Event ID 10000).
+
+---
+
+## MikroTik VLAN Routing (VLAN20 ↔ VLAN40)
+
+Required firewall rules for CT305 → vivo2:
+```
+#39: chain=forward accept tcp 10.10.40.35→10.10.20.200:4001  (LiteLLM)
+#40: chain=forward accept tcp 10.10.40.35→10.10.20.200:11434 (Ollama)
+```
 
 ---
 
 ## Immich ML Offload
 
-Immich (running on CT302) offloads CLIP embeddings, face recognition, and OCR to the Snapdragon NPU via `immich-machine-learning` container on vivo2.
+Immich (CT302) offloads CLIP/face/OCR to `immich-machine-learning` on vivo2 (:8002).
 
 ```yaml
-# immich docker-compose.yml (partial)
 environment:
-  MACHINE_LEARNING_URL: http://10.10.20.200:3003
+  MACHINE_LEARNING_URL: http://10.10.20.200:8002
 ```
 
-The ML container must be reachable from CT302 (cross-VLAN: SERVERS → MAIN). Ensure:
-1. MikroTik forward rule: `10.10.40.32 → 10.10.20.200:3003`
-2. Windows Hyper-V Firewall inbound rule on port 3003 (auto-created by boot script)
+MikroTik rule required: `10.10.40.32 → 10.10.20.200:3003`
 
 ---
 
-## Repository Structure
+## Related Repos
 
-```
-homelab-ai-stack/
-├── README.md
-├── docs/
-│   ├── model-tiers.md             — CPU vs NPU model selection guide
-│   ├── immich-ml-offload.md       — Full Immich ML remote setup
-│   ├── disk-cleanup.md            — WSL VHDX compaction procedure
-│   └── snapdragon-npu.md          — QNN/ONNX model formats explained
-├── scripts/
-│   ├── start-ai-stack.ps1         — PowerShell: WSL2 + Docker Compose start
-│   └── compact-wsl-vhdx.ps1       — Reclaim space after large WSL deletions
-├── wsl2/
-│   ├── task-scheduler-setup.md    — Autostart XML + debugging guide
-│   ├── ai-stack-task.xml          — Task Scheduler XML (import with schtasks)
-│   ├── docker-compose.yml         — Full AI stack definition
-│   └── .env.example               — Service ports, model paths
-└── configs/
-    └── env.example
-```
+- [ai-platform-os](https://github.com/gaiagent0/ai-platform-os) — canonical architecture, decision log, infra templates
+- [proxmox-mcp](https://github.com/gaiagent0/proxmox-mcp) — Proxmox MCP server (CT150)
+- [pve-ai-agent](https://github.com/gaiagent0/pve-ai-agent) — AI monitoring agent (CT304)
+- [vivo2-ai-stack-2026](https://github.com/gaiagent0/vivo2-ai-stack-2026) — vivo2 edge stack detail
+- [snapdragon-ai-stack](https://github.com/gaiagent0/snapdragon-ai-stack) — Snapdragon NPU setup guide
 
 ---
 
-## Security Notes
-
-- **open-webui** should be bound to `0.0.0.0` only inside a trusted VLAN. Do not expose to WAN without auth.
-- **n8n** webhooks are unauthenticated by default — enable basic auth in the n8n settings UI before exposing any webhook endpoints.
-- **Hyper-V Firewall** rules created by the boot script are scoped to `10.10.40.0/24` (SERVERS VLAN) by default. Verify scope before widening.
-- Windows Firewall rules persist across reboots but **not** across Windows updates that reset the Hyper-V virtual switch — the boot script recreates them automatically.
-
----
-
-## Disk Management
-
-WSL2 `ext4.vhdx` does **not** automatically shrink after large deletions. After removing model files inside WSL, compact manually:
-
-```bash
-# Inside WSL: zero free blocks
-dd if=/dev/zero of=~/zero.tmp bs=1M status=progress; rm -f ~/zero.tmp
-```
-```powershell
-# Windows: shutdown WSL (auto-compacts on shutdown)
-wsl --shutdown
-```
-
-Expected result: ext4.vhdx shrinks from ~100 GB to ~40 GB after removing ~60 GB of model cache.
-
----
-
-*Tested on: ASUS Vivobook S15 S5507QA, Snapdragon X Elite X1E78100, 32 GB RAM, Windows 11 Home ARM64 24H2*
+*Hardware: ASUS Vivobook S15 S5507QA, Snapdragon X Elite X1E78100, 32 GB RAM, Windows 11 ARM64*  
+*Last updated: 2026-06-26*
